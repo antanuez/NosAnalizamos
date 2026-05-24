@@ -8,7 +8,7 @@ output:
 ---
 ```{r setup, include=FALSE}
 # Bloque de configuración inicial ultra-limpio
-#knitr::opts_chunk$chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 # No sé por qué, pero no me deja utilizar la librería knitr
 
 if (!require("pacman")) install.packages("pacman")
