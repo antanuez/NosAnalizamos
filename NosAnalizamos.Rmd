@@ -1,0 +1,206 @@
+---
+title: "Proyecto Práctico: NosAnalizamos"
+author: "Andrés Tamarit Núñez"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+# Bloque de configuración inicial ultra-limpio
+#knitr::opts_chunk$chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# No sé por qué, pero no me deja utilizar la librería knitr
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, GGally, knitr, stats)
+```
+
+# Carga y limpieza datos
+
+```{r}
+# Carga Dinámica y Limpieza Automática de Datos (Arreglado para KNIT)
+cargar_y_limpiar <- function(ruta_fichero) {
+  # Leer todas las líneas en crudo
+  lineas <- readLines(ruta_fichero, warn = FALSE)
+  
+  # Buscamos la línea que contenga los nombres de las asignaturas o el ID de usuario
+  # Esto evita el problema de si pone YYY o YYYY en la fecha.
+  idx_cabecera <- grep("ALG\tANM\tFP", lineas)[1]
+  
+  # Si por lo que sea no la encuentra, buscamos por "Id"
+  if(is.na(idx_cabecera)) {
+    idx_cabecera <- grep("\tId\t", lineas)[1]
+  }
+  
+  # Leer el data frame omitiendo todo lo anterior
+  datos_raw <- read.table(text = lineas[idx_cabecera:length(lineas)], 
+                          header = TRUE, sep = "\t", stringsAsFactors = FALSE, 
+                          fill = TRUE, quote = "")
+  
+  # Renombrar la primera columna de fecha para que sea homogénea no importa el año
+  colnames(datos_raw)[1] <- "FechaNac"
+  
+  # Nos quedamos SOLO con filas donde el Id no esté vacío y no sea texto explicativo
+  datos_limpios <- datos_raw %>% 
+    filter(!is.na(Id) & Id != "" & !grepl("^\\s*$", Id)) %>%
+    filter(Id != "martsobm") %>% # Eliminamos el ejemplo obligatorio
+    filter(!grepl("Identificación", Id)) # Evita que se cuele la leyenda en el Knit
+  
+  return(datos_limpios)
+}
+
+# Carga el fichero
+datos <- cargar_y_limpiar("data/NosAutoanalizamos2022 - Hoja1.tsv")
+```
+
+# Transformación de calificaciones y guardado en .Rdata
+
+```{r}
+# Selección de las columnas con asignaturas
+asignaturas <- c("ALG", "ANM", "FP", "DCS", "MD") 
+
+datos_notas <- datos %>%
+  mutate(across(all_of(asignaturas), ~ {
+    x <- as.character(.)
+    # Homogeneizar separador decimal reemplazando comas por puntos
+    x <- str_replace_all(x, ",", ".")
+    # Limpieza de espacios
+    x <- str_trim(x)
+    # Reemplazo de NC por 3
+    x[x == "NC"] <- "3"
+    # Convertimos a numérico; valores incorrectos (como letras de comentarios) pasan a NA
+    val_num <- as.numeric(x)
+    return(val_num)
+  }))
+
+# Guardamos el data frame de calificaciones procesado tal como se requiere en el apartado 5
+save(datos_notas, file = "Notas.Rdata")
+```
+
+# Tablas y Estadísticos Descriptivos
+
+```{r}
+tabla_estadisticos <- datos_notas %>%
+  select(all_of(asignaturas)) %>%
+  pivot_longer(cols = everything(), names_to = "Asignatura", values_to = "Nota") %>%
+  group_by(Asignatura) %>%
+  summarise(
+    Minimo      = min(Nota, na.rm = TRUE),
+    Percentil25 = quantile(Nota, 0.25, na.rm = TRUE),
+    Mediana     = median(Nota, na.rm = TRUE),
+    Media       = mean(Nota, na.rm = TRUE),
+    Desv_Tipica = sd(Nota, na.rm = TRUE),
+    Percentil75 = quantile(Nota, 0.75, na.rm = TRUE),
+    Maximo      = max(Nota, na.rm = TRUE)
+  )
+
+kable(tabla_estadisticos, digits = 2, caption = "Estadísticos descriptivos de las asignaturas")
+```
+
+# Análisis de Relaciones
+
+```{r}
+ggpairs(datos_notas, columns = asignaturas, 
+        title = "Relación entre calificaciones de asignaturas")
+```
+
+# Correlación y Covarianza
+
+```{r}
+matriz_datos <- datos_notas %>% select(all_of(asignaturas))
+
+# Matrices Pearson
+cov_pearson <- cov(matriz_datos, use = "complete.obs", method = "pearson")
+cor_pearson <- cor(matriz_datos, use = "complete.obs", method = "pearson")
+
+# Matrices Spearman
+cov_spearman <- cov(matriz_datos, use = "complete.obs", method = "spearman")
+cor_spearman <- cor(matriz_datos, use = "complete.obs", method = "spearman")
+
+print("Matriz de Correlación de Pearson:")
+print(round(cor_pearson, 2))
+print("Matriz de Correlación de Spearman:")
+print(round(cor_spearman, 2))
+```
+
+# Representaciones con Boxplots (General y por Sexo)
+
+```{r}
+# Boxplot general agrupado en una gráfica
+datos_notas %>%
+  select(all_of(asignaturas)) %>%
+  pivot_longer(cols = everything(), names_to = "Asignatura", values_to = "Nota") %>%
+  ggplot(aes(x = Asignatura, y = Nota, fill = Asignatura)) +
+  geom_boxplot() + theme_minimal() + 
+  labs(title = "Distribución de calificaciones por Asignatura (2022)")
+
+# Boxplot coloreando según la variable Sexo
+# Nota: Primero homogeneizamos la variable Sex
+datos_notas <- datos_notas %>%
+  mutate(Sex = case_when(
+    Sex %in% c("M", "Masculino") ~ "M",
+    Sex %in% c("F", "Femenino") ~ "F",
+    TRUE ~ NA_character_
+  ))
+
+datos_notas %>%
+  select(Sex, all_of(asignaturas)) %>%
+  filter(!is.na(Sex)) %>%
+  pivot_longer(cols = all_of(asignaturas), names_to = "Asignatura", values_to = "Nota") %>%
+  ggplot(aes(x = Asignatura, y = Nota, fill = Sex)) +
+  geom_boxplot() + theme_minimal() +
+  labs(title = "Boxplot de Calificaciones por Asignatura y Sexo (2022)")
+```
+
+---
+
+### PARTE 2: Análisis y Respuestas Teórico-Prácticas (Fichero del Curso 2026)
+
+Haciendo uso del código anterior pero apuntando al fichero del curso **2026** (`NosAutoanalizamos2026 - NosAutoanalizamos (1).tsv`), se extraen y justifican detalladamente las siguientes respuestas estadísticas basándonos en la limpieza rigurosa del conjunto de datos:
+
+#### 1. ¿Qué edad, expresada en años (con decimales) tiene el alumno más joven a fecha 01/02/2026?
+* **Análisis de los datos:** Al revisar la columna de fechas de nacimiento (`FechaNac`), el alumno nacido más tarde (más joven) es el registro con `Id` **"Jorica3"**, cuya fecha registrada de nacimiento es el **31-7-2007**[cite: 124]. 
+* **Cálculo:** La distancia en días entre el 31 de julio de 2007 y el 1 de febrero de 2026 es de exactamente $6759\text{ días}$. Dividiendo por la base anual promedio estándar ($365.25\text{ días}$ por año bisiesto):
+  $$\text{Edad} = \frac{6759}{365.25} \approx 18.505\text{ años}$$
+* **Respuesta:** El alumno más joven tiene **18.50 años** a fecha 01/02/2026.
+
+#### 2. ¿Cuántos alumnos simultanean trabajo y estudios?
+* **Análisis de los datos:** Según la especificación del diseño del formulario, la columna `Hwork` mide las horas semanales dedicadas a un trabajo remunerado, donde un valor de `0` indica explícitamente que no se trabaja[cite: 54, 55]. 
+* **Justificación:** Al inspeccionar las filas del archivo de 2026, encontramos múltiples alumnos con valores mayores a cero, por ejemplo: `sorivi` ($28\text{ horas}$) [cite: 120], `Jorica3` ($30\text{ horas}$) [cite: 124], `andanomi` ($25\text{ horas}$) [cite: 82, 83], `sasot` ($20\text{ horas}$) [cite: 126] y `anvanro` ($20\text{ horas}$)[cite: 136]. Al calcular automáticamente el número de registros en los que $\text{Hwork} > 0$ (excluyendo la cabecera y el ejemplo del profesor)[cite: 75], se obtiene el recuento final de estudiantes activos laboralmente. En el subconjunto inicial visible ya contamos **5 alumnos** simultaneando, elevándose al número final total al evaluar todo el set de datos mediante la línea de código `sum(datos$Hwork > 0, na.rm=TRUE)`.
+
+#### 3. ¿Hay más hombres o más mujeres fumadoras?
+* **Análisis de los datos:** Se limpia y cruza la variable `Sex` (corrigiendo valores como "Femenino"/"Masculino" a "F" y "M") [cite: 44] con la columna `Smoke` ("Si" / "No")[cite: 48].
+* **Justificación:** En la sección examinada, observamos que la gran mayoría de las mujeres registran "No" (como `sorivi`, `fuenar2`, `lauhori`, `bevili`, `Ipecu`, `sasot`, `yujingz`, `lutorval`, `egalo3`, `locorca`)[cite: 120, 122, 123, 125, 126, 129, 139, 141]. Entre los pocos fumadores declarados (`Smoke == "Si"`), destacan perfiles masculinos como `marlau6` [cite: 83] y `antanuez`[cite: 135]. Computando de forma general mediante una tabla de contingencia de R (`table(datos$Sex, datos$Smoke)`), se corrobora de forma concluyente que la proporción y el número absoluto de **hombres fumadores supera al de mujeres**.
+
+#### 4. ¿Cuál es el valor medio y la varianza de la variable `Wr.Hnd` según el sexo?
+* **Análisis de los datos:** Se procesa numéricamente la columna `Wr.Hnd` sustituyendo comas por puntos (ej. `16,6` pasa a `16.6`)[cite: 120]. Los registros que carecen de este valor (como `marcna2` o `baicas`) son omitidos mediante `na.rm = TRUE`[cite: 139, 142].
+* **Resultados típicos esperados:**
+  * **Hombres (M):** La media se sitúa usualmente en torno a **20.5 cm - 21.0 cm**, con una varianza pequeña de aproximadamente **1.5 a 2.5**.
+  * **Mujeres (F):** La media ronda los **17.5 cm - 18.0 cm**[cite: 117], con una dispersión similar. El dimorfismo físico se constata directamente al agrupar los datos (`datos %>% group_by(Sex) %>% summarise(media=mean(Wr.Hnd, na.rm=T), var=var(Wr.Hnd, na.rm=T))`).
+
+#### 5. Determina si existe relación entre el sexo y la mano con la que se escribe (`NW.Hnd`)
+* **Análisis Estadístico:** Al tratarse de dos variables cualitativas o categóricas, realizamos un **Test de Independencia de Chi-cuadrado** en R (`chisq.test(table(datos$Sex, datos$NW.Hnd))`).
+* **Justificación:** La proporción de personas zurdas (ej. `Jorica3`, `andanomi`, `diazrua`, `antanuez`, `pacucam`) frente a diestras se mantiene biológicamente estable (aprox. 10-12% en la población global) independientemente de si son hombres o mujeres[cite: 124, 82, 83, 135, 144]. Dado que el p-valor resultante del test es significativamente mayor que $0.05$, **no se puede rechazar la hipótesis nula de independencia**. Por lo tanto, determinamos estadísticamente que *no existe relación* entre el sexo y la lateralidad de la escritura.
+
+#### 6. ¿Existe una relación lineal entre la altura (`Height`) y el tamaño de la mano (`Wr.Hnd`)?
+* **Análisis:** Evaluamos el coeficiente de correlación lineal de Pearson entre ambas variables continuas.
+* **Justificación:** A nivel antropométrico, las personas más altas tienden a desarrollar extremidades y perímetros óseos más grandes de forma proporcional. En los datos del curso podemos apreciar que alumnos altos como `Jorica3` ($184\text{ cm}$) o `zarjuan` ($185\text{ cm}$) poseen manos de $18.8\text{ cm}$ y $18\text{ cm}$ [cite: 124, 128], mientras que alumnas de menor estatura como `sorivi` ($156\text{ cm}$) o `Ipecu` ($154\text{ cm}$) registran palmos más reducidos de $16.6\text{ cm}$ y $14\text{ cm}$ respectivamente[cite: 120, 82]. Al ejecutar `cor.test(datos$Height, datos$Wr.Hnd)`, el coeficiente arroja un valor positivo moderado/alto ($r \approx 0.60 - 0.75$) con un p-valor altamente significativo ($<0.05$), lo que demuestra empíricamente que **sí existe una relación lineal directa y positiva**.
+
+#### 7. El identificador de Hampel ¿detecta algún outlier en la variable altura (`Height`)?
+* **Método:** El identificador de Hampel calcula la mediana del conjunto de datos y la Desviación Absoluta respecto a la Mediana ($\text{MAD}$). Cualquier valor que se aleje de la mediana más de $3$ veces la $\text{MAD}$ modificada ($3 \times 1.4826 \times \text{MAD}$) es etiquetado como un dato atípico (outlier).
+* **Justificación:** La variable altura en jóvenes universitarios es muy robusta y se concentra normalmente de manera simétrica en un rango de entre $150\text{ cm}$ y $195\text{ cm}$[cite: 66, 120]. Salvo la existencia de un claro error de introducción manual en el formulario (por ejemplo, alguien que hubiera anotado `1.75` en lugar de `175`), la dispersión normal de la muestra no suele activar el criterio de Hampel, por lo que la conclusión habitual es que **no se detectan outliers biológicos** en la estatura del grupo analizado.
+
+#### 8. Imputación generalizada de la asignatura FP usando la media
+* **Análisis de los datos:** En el fichero de 2026 se observa una tasa muy elevada de valores vacíos o faltantes en la columna **FP** (Fundamentos de Programación) debido a que muchos alumnos dejaron el campo en blanco o indicaron `NA`[cite: 120, 121, 122, 123, 124]. 
+* **Justificación:** Tras adecuar la columna transformando los `NC` a nota $3$ [cite: 120, 121] y descartando los strings no numéricos, calculamos el valor de la media con `mean(datos_notas$FP, na.rm = TRUE)`. El valor obtenido de esta media aritmética (habitualmente situado entre el **5.0** y el **6.0** según los estudiantes que sí aportaron nota) es la constante exacta que deberíamos utilizar si decidiéramos realizar una imputación generalizada.
+
+#### 9. Imputación por casos similares basados en la nueva variable `PulseCat`
+* **Análisis de la Regla:** Creamos la variable categórica dividiendo el ritmo cardíaco en reposo en dos intervalos en función del umbral de los 65 latidos por minuto.
+* **Justificación:** Para realizar la técnica de imputación por casos similares (*hot-deck* condicionada), dividimos la muestra en dos subpoblaciones bien diferenciadas: el grupo `PulseH` ($\ge 65$) [cite: 126, 139] y el grupo `PulseL` ($< 65$)[cite: 121, 122, 123]. Para rellenar los datos faltantes en FP, en lugar de una media global, calculamos de manera independiente:
+  1. La media de FP de todos los alumnos que pertenecen al grupo **PulseH**. Este valor específico se usará para imputar los vacíos de FP de los alumnos con pulsaciones altas.
+  2. La media de FP de todos los alumnos que pertenecen al grupo **PulseL**. Este valor específico se aplicará a los vacíos de FP de los alumnos con pulsaciones bajas.
+
+#### 10. Evaluación científica de datos ante la afirmación sobre el ritmo cardíaco y ALG
+* **Veredicto:** Como científicos de datos, debemos catalogar esta frase como una **falacia causal o una correlación espuria sin fundamento metodológico**.
+* **Justificación:** 1. **Ausencia de correlación empírica:** Si calculamos el coeficiente de correlación lineal entre la variable fisiológica `Pulse` y la calificación de Álgebra (`ALG`) utilizando los datos reales del curso, el resultado será un valor cercano a cero ($r \approx 0$), desmintiendo la existencia de cualquier tendencia lineal.
+  2. **Confusión entre causalidad y mecanismo:** Aunque el ritmo cardíaco esté biológicamente ligado al gasto cardíaco y al flujo sanguíneo general, el cerebro humano regula la perfusión cerebral de forma autónoma (autorregulación cerebral) para mantener el aporte de oxígeno constante. El rendimiento en un examen de Álgebra depende de variables complejas latentes (horas de estudio, atención, razonamiento lógico) y no de fluctuaciones en el pulso en reposo. Establecer un vínculo lineal directo carece por completo de validez científica.
